@@ -1,45 +1,56 @@
-from typing import Optional
-import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from fastapi.templating import Jinja2Templates
-from models import GithubUserModel
+from fastapi import FastAPI, File
+from segmentation import get_yolov5, get_image_from_bytes
+from starlette.responses import Response
+import io
+from PIL import Image
+import json
+from fastapi.middleware.cors import CORSMiddlewares
+
+model = get_yolov5()
 
 app = FastAPI()
-templates = Jinja2Templates(directory="templates")
 
-limits = httpx.Limits(max_keepalive_connections=5, max_connections=10)
-timeout = httpx.Timeout(timeout=5.0, read=15.0)
-client = httpx.AsyncClient(limits=limits, timeout=timeout)
+@app.get("/")
+async def root():
+    return {"message": "Hello World"}
+
+@app.get('/notify/v1/health')
+def get_health():
+    """
+    Usage on K8S
+    readinessProbe:
+        httpGet:
+            path: /notify/v1/health
+            port: 80
+    livenessProbe:
+        httpGet:
+            path: /notify/v1/health
+            port: 80
+    :return:
+        dict(msg='OK')
+    """
+    return dict(msg='OK')
+
+@app.post("/object-to-json")
+async def detect_food_return_json_result(file: bytes = File(...)):
+    input_image = get_image_from_bytes(file)
+    results = model(input_image)
+    detect_res = results.pandas().xyxy[0].to_json(orient="records")  # JSON img1 predictions
+    detect_res = json.loads(detect_res)
+    return {"result": detect_res}
 
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    print("shutting down...")
-    await client.aclose()
+@app.post("/object-to-img")
+async def detect_food_return_base64_img(file: bytes = File(...)):
+    input_image = get_image_from_bytes(file)
+    results = model(input_image)
+    results.render()  # updates results.imgs with boxes and labels
+    for img in results.ims:
+        bytes_io = io.BytesIO()
+        img_base64 = Image.fromarray(img)
+        img_base64.save(bytes_io, format="jpeg")
+    return Response(content=bytes_io.getvalue(), media_type="image/jpeg")
 
-
-@app.get("/", response_class=HTMLResponse)
-async def index(request: Request, username: str = None):
-    if not username:
-        return templates.TemplateResponse("index.html", context={"request": request})
-
-    user = await get_github_profile(request, username)
-    if not user:
-        return templates.TemplateResponse("404.html", context={"request": request})
-
-    return templates.TemplateResponse("index.html", context={"request": request, "user": user})
-
-
-@app.get("/{username}", response_model=GithubUserModel)
-async def get_github_profile(request: Request, username: str) -> Optional[GithubUserModel]:
-    headers = {"accept": "application/vnd.github.v3+json"}
-
-    response = await client.get(f"https://api.github.com/users/{username}", headers=headers)
-
-    if response.status_code == 404:
-        return None
-
-    user = GithubUserModel(**response.json())
-
-    return user
+if __name__ == '__main__':
+    import uvicorn
+    uvicorn.run(app)
