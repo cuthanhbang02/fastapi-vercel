@@ -4,7 +4,6 @@ from starlette.responses import Response
 import io
 from PIL import Image
 import json
-from fastapi.middleware.cors import CORSMiddlewares
 
 model = get_yolov5()
 
