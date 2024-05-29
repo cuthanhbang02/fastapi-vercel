@@ -8,6 +8,8 @@ from starlette.responses import Response
 import io
 from PIL import Image
 import json
+import base64
+from fastapi.middleware.cors import CORSMiddleware
 
 dataset=pd.read_csv('Data/sample.csv')
 
@@ -15,6 +17,21 @@ print(dataset)
 model = get_yolov5()
 
 app = FastAPI()
+
+origins = [
+    "192.168.43.47:8000",
+    "http://localhost:8000",
+    "*"
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 
 class params(BaseModel):
     n_neighbors:int=5
@@ -46,6 +63,8 @@ class Recipe(BaseModel):
 class PredictionOut(BaseModel):
     output: Optional[List[Recipe]] = None
 
+class UploadimageSchema(BaseModel):
+    image:bytes 
 
 @app.get("/")
 async def root():
@@ -69,12 +88,22 @@ def get_health():
     return dict(msg='OK')
 
 @app.post("/object-to-json")
-async def detect_food_return_json_result(file: bytes = File(...)):
+async def detect_ingre_return_json_result(file: bytes = File(...)):
     input_image = get_image_from_bytes(file)
     results = model(input_image)
     detect_res = results.pandas().xyxy[0].to_json(orient="records")  # JSON img1 predictions
     detect_res = json.loads(detect_res)
     return {"result": detect_res}
+
+@app.post("/binary-object-to-json")
+async def binary_detect_ingre_return_json_result(payload:UploadimageSchema):
+    data_split = payload.image.split('base64,')
+    encoded_data = data_split[1]
+    input_image = base64.b64decode(encoded_data)
+    with open("uploaded_image.png", "wb") as writer:
+        writer.write(input_image)
+
+    return {"detail": "Profile update successful"}
 
 
 @app.post("/object-to-img")
